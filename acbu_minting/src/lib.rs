@@ -7,8 +7,8 @@ use soroban_sdk::{
 };
 
 use shared::{
-    calculate_amount_after_fee, calculate_fee, check_oracle_freshness, ContractPhase, CurrencyCode,
-    DataKey as SharedDataKey, MintEvent, reentrancy_guard, BASIS_POINTS, CONTRACT_VERSION, DECIMALS,
+    calculate_amount_after_fee, calculate_fee, check_oracle_freshness, is_account_address,
+    ContractPhase, CurrencyCode, DataKey as SharedDataKey, MintEvent, reentrancy_guard, BASIS_POINTS, CONTRACT_VERSION, DECIMALS,
     MAX_MINT_AMOUNT, MAX_TOTAL_SUPPLY, MIN_MINT_AMOUNT, ORACLE_GET_ACBU_RATE_WITH_TS,
     ORACLE_GET_BASKET_WEIGHT, ORACLE_GET_CURRENCIES, ORACLE_GET_RATE, ORACLE_GET_RATE_WITH_TS,
     ORACLE_GET_S_TOKEN_ADDR, RESERVE_IS_SUFFICIENT, UPDATE_INTERVAL_SECONDS,
@@ -1538,15 +1538,8 @@ impl MintingContract {
     }
 
     fn assert_recipient_is_account(address: &Address) {
-        let env = address.env();
-        let strkey = address.to_string();
-        if strkey.len() != 56 {
-            env.panic_with_error(MintingError::InvalidRecipient);
-        }
-        let mut buf = [0u8; 56];
-        strkey.copy_into_slice(&mut buf);
-        if buf[0] != b'G' {
-            env.panic_with_error(MintingError::InvalidRecipient);
+        if !is_account_address(address) {
+            address.env().panic_with_error(MintingError::InvalidRecipient);
         }
     }
 
