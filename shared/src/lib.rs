@@ -210,6 +210,55 @@ pub struct OutlierDetectionEvent {
     pub timestamp: u64,
 }
 
+/// A single validator's emergency-bypass vote for a currency pair.
+///
+/// When a validator submits a rate that exceeds the per-currency emergency
+/// threshold it is recorded here.  Once `min_signatures` validators have cast
+/// votes, the time-lock bypass is granted and the pending votes are cleared.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct EmergencyVote {
+    /// The validator who submitted the candidate rate.
+    pub validator: Address,
+    /// The proposed rate (7 decimals).
+    pub rate: i128,
+    /// Ledger timestamp of the submission (used to expire stale votes).
+    pub timestamp: u64,
+}
+
+/// Per-currency emergency bypass configuration stored in oracle instance storage.
+///
+/// Allows operators to tune the threshold per currency pair so that naturally
+/// more-volatile currencies (e.g. ZWL, SSP) do not trigger false-positive
+/// emergency bypasses while still catching genuine crises in stable pairs.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct EmergencyConfig {
+    /// Deviation in basis points that triggers an emergency vote.
+    /// Defaults to [`EMERGENCY_THRESHOLD_BPS`] (500 bps = 5 %).
+    pub threshold_bps: i128,
+}
+
+/// Event emitted when an emergency vote is cast (validator requests bypass).
+#[contracttype]
+pub struct EmergencyVoteCastEvent {
+    pub currency: CurrencyCode,
+    pub validator: Address,
+    pub rate: i128,
+    pub vote_count: u32,
+    pub required: u32,
+    pub timestamp: u64,
+}
+
+/// Event emitted when enough emergency votes accumulate and the bypass fires.
+#[contracttype]
+pub struct EmergencyBypassEvent {
+    pub currency: CurrencyCode,
+    pub new_rate: i128,
+    pub vote_count: u32,
+    pub timestamp: u64,
+}
+
 /// Error types for the **burning** contract (and any crate that re-uses this enum).
 ///
 /// Numeric codes are stable for client UX; see `docs/ERROR_CODES.md` in the workspace root.
@@ -249,6 +298,11 @@ pub enum ContractError {
     /// WASM upgrade rejected: `new_version` must be greater than the stored version.
     InvalidVersion = 12,
 
+    /// The computed output amount is below the caller-supplied minimum acceptable
+    /// output (`min_*_out`), indicating that same-block oracle movement would
+    /// cause unacceptable slippage for this transaction.
+    SlippageExceeded = 13,
+
     Unknown = 9999,
 }
 
@@ -267,6 +321,7 @@ impl core::fmt::Display for ContractError {
             ContractError::InsufficientBalance => write!(f, "insufficient balance"),
             ContractError::InvalidRecipient => write!(f, "invalid recipient"),
             ContractError::InvalidVersion => write!(f, "invalid version"),
+            ContractError::SlippageExceeded => write!(f, "output below minimum: slippage exceeded"),
             ContractError::Unknown => write!(f, "unknown error"),
         }
     }
@@ -334,6 +389,23 @@ pub fn calculate_amount_after_fee(amount: i128, fee_rate_bps: i128) -> i128 {
     amount
         .checked_sub(calculate_fee(amount, fee_rate_bps))
         .expect("Underflow in amount after fee calculation")
+}
+
+/// Returns `true` if `address` is a classic Stellar account (a `G…` strkey).
+///
+/// Mint and redeem recipients must be accounts: tokens sent to a contract
+/// address (`C…`), including the minting/burning contract itself, can be
+/// stranded. Both halves of the flow use this one predicate so their
+/// stranding protection cannot drift apart (AC-031). Callers panic with their
+/// own `InvalidRecipient` error so contract error codes stay unchanged.
+pub fn is_account_address(address: &Address) -> bool {
+    let strkey = address.to_string();
+    if strkey.len() != 56 {
+        return false;
+    }
+    let mut buf = [0u8; 56];
+    strkey.copy_into_slice(&mut buf);
+    buf[0] == b'G'
 }
 
 /// Calculate median using in-place quickselect algorithm
